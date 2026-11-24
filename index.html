@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
-<title>ЗОНА: Территория отчуждения</title>
+<title>ЗОНА v14 — Система выживания</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@700;900&display=swap');
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;}
@@ -1747,7 +1747,7 @@ function resolveShelterCollision(entity, bodyRadius=.38){
   }
 }
 function getShelterAt(x,z){return shelters.find(h=>Math.hypot(x-h.x,z-h.z)<=h.radius)||null;}
-function isProtectedFromEmission(x,z){return Math.hypot(x-SAFE_ZONE_CENTER.x,z-SAFE_ZONE_CENTER.z)<SAFE_ZONE_RADIUS || !!getShelterAt(x,z);}
+function isProtectedFromEmission(x,z){return Math.hypot(x-SAFE_ZONE_CENTER.x,z-SAFE_ZONE_CENTER.z)<SAFE_ZONE_RADIUS || !!getShelterAt(x,z) || (isPlayerInsideScienceBunker() && Math.abs(x-405)<20.2 && z>339.5 && z<372.2);}
 addShelter(-34,26,'Лесной бункер');
 addShelter(42,-34,'Старая сторожка');
 addShelter(-54,-48,'Заброшенный пост');
@@ -3279,7 +3279,11 @@ let psiLoad=0, psiDamageTimer=0, psiSoundTimer=0, psiMaxDamagePulse=0;
 const psiOverlay=document.getElementById("psiOverlay"), psiBanner=document.getElementById("psiBanner"), psiFill=document.getElementById("psiFill"), psiPct=document.getElementById("psiPct");
 let savedWorldData = null;
 let pendingResourceRespawns = [];
+// Блокирует автосохранение при переходе к новой игре, чтобы beforeunload
+// и visibilitychange не записали удалённый старый прогресс обратно.
+let suppressSaveWrites = false;
 function saveState(){
+  if(suppressSaveWrites) return;
   try{
     localStorage.setItem('stalker_zone_v14', JSON.stringify({
       version:23, state, inventory, artifactSlots, armorGear, deviceGear, weaponGear, equippedIndex, ammoInMag,
@@ -3392,9 +3396,13 @@ const loaded = loadState();
   // Новая игра: очищаем старые данные и перезапускаем игру с начальными значениями.
   document.getElementById('menuNewGame').addEventListener('click',()=>{
     if(hasSave && !confirm('Начать новую игру? Текущее автосохранение будет удалено.')) return;
+    // Сначала запрещаем любые фоновые записи, затем удаляем все данные прогресса.
+    // Иначе обработчики beforeunload/visibilitychange могли восстановить старое сохранение.
+    suppressSaveWrites = true;
     try{
       localStorage.removeItem('stalker_zone_v14');
       localStorage.removeItem('stalker_zone_v13');
+      localStorage.removeItem('zone_bunker_cases');
       sessionStorage.setItem('zona_start_loading','1');
     }catch(e){hint.textContent='Не удалось очистить старое сохранение.';return;}
     showLoading('СОЗДАНИЕ НОВОГО МИРА...',()=>location.reload());
@@ -3889,8 +3897,137 @@ function restoreMilitaryCrates(){try{const d=JSON.parse(localStorage.getItem('zo
 function updateMilitaryCrates(dt){militaryCrateSpawnTimer-=dt;if(militaryCrateSpawnTimer<=0){spawnMilitaryCrate();militaryCrateSpawnTimer=900;}for(let i=militaryCrates.length-1;i>=0;i--){const c=militaryCrates[i];const empty=!c.loot||c.loot.every(v=>!v||!v.id||v.cnt<=0);if(empty){if(c.emptySince==null)c.emptySince=Date.now();if(Date.now()-c.emptySince>=180000){scene.remove(c.mesh);militaryCrates.splice(i,1);if(militaryCratePanel.style.display==='block')militaryCratePanel.style.display='none';saveMilitaryCrates();}}else c.emptySince=null;}}
 function nearbyMilitaryCrate(){let best=null,dBest=2.8;for(const c of militaryCrates){const d=Math.hypot(player.position.x-c.x,player.position.z-c.z);if(d<dBest){best=c;dBest=d;}}return best;}
 function openMilitaryCrate(c){militaryCratePanel.style.display='block';militaryCratePanel.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><b>ВОЕННЫЙ ЯЩИК</b><button id="crateClose" style="background:#40563b;color:#fff;border:1px solid #80956f;border-radius:6px;padding:5px 10px">Закрыть</button></div><div id="crateSlots" style="display:grid;grid-template-columns:repeat(5,1fr);gap:7px"></div><div style="opacity:.75;margin-top:8px;font-size:12px">Нажми на предмет, чтобы перенести его в инвентарь.</div>`;const grid=militaryCratePanel.querySelector('#crateSlots');(Array.isArray(c.loot)?c.loot:[]).forEach((it,i)=>{const slot=document.createElement('button');slot.style.cssText='min-height:70px;background:#253027;border:1px solid #64775c;border-radius:7px;color:#f2f3eb;padding:5px;';if(it&&it.id){const def=ITEM_DEFS[it.id];if(def){slot.innerHTML=`${def.icon}<br><small>${def.name}${it.cnt>1?' ×'+it.cnt:''}</small>`;slot.onclick=()=>{if(addItem(it.id,it.cnt)){c.loot[i]=null;if(c.loot.every(v=>!v||!v.id||v.cnt<=0))c.emptySince=Date.now();slot.innerHTML='—<br><small>Пусто</small>';slot.disabled=true;saveMilitaryCrates();saveState();log('Предмет перенесён в инвентарь');}else log('Инвентарь заполнен');};}else slot.innerHTML='Пусто';}else{slot.innerHTML='—<br><small>Пусто</small>';slot.disabled=true;}grid.appendChild(slot);});document.getElementById('crateClose').onclick=()=>{militaryCratePanel.style.display='none';};}
+
 restoreMilitaryCrates();
+
+// ===== ЧЕМОДАНЫ С ПРИПАСАМИ В НАУЧНОМ БУНКЕРЕ =====
+const bunkerCases=[];
+let bunkerCaseSpawnTimer=300+Math.random()*1800;
+let bunkerCasePanel=document.getElementById('bunkerCasePanel');
+if(!bunkerCasePanel){
+  bunkerCasePanel=document.createElement('div');
+  bunkerCasePanel.id='bunkerCasePanel';
+  bunkerCasePanel.style.cssText='display:none;position:fixed;z-index:10025;left:50%;top:50%;transform:translate(-50%,-50%);width:min(92vw,390px);background:rgba(12,18,16,.98);border:2px solid #8b7650;border-radius:14px;padding:14px;color:#eee9d9;font:14px system-ui;box-shadow:0 14px 48px #000';
+  document.body.appendChild(bunkerCasePanel);
+}
+function bunkerCaseLootRoll(){
+  const medical=[
+    ['medkit',1],['medkit',2],['bandage',2+Math.floor(Math.random()*3)],
+    ['antidote',1],['antirad',1],['stimulant',1],['water',1]
+  ];
+  const rare=[
+    ['artifact_medical',1],['artifact_moon',1],['artifact_scarab',1],
+    ['artifact_anchor',1],['artifact_crystal',1],['helmet_tactical',1],
+    ['backpack_large',1],['suit_light',1],['artifact_spore',1],['artifact_shell',1]
+  ];
+  const loot=[];
+  loot.push((medical[Math.floor(Math.random()*medical.length)]));
+  const secondPool=Math.random()<.58?medical:rare;
+  loot[1]=secondPool[Math.floor(Math.random()*secondPool.length)];
+  const thirdPool=Math.random()<.78?rare:medical;
+  loot.push(thirdPool[Math.floor(Math.random()*thirdPool.length)]);
+  return loot.map(v=>({id:v[0],cnt:v[1]}));
+}
+function buildBunkerCaseMesh(x,z){
+  const g=new THREE.Group();
+  const shell=new THREE.MeshStandardMaterial({color:0x4a5149,roughness:.86,metalness:.28});
+  const dark=new THREE.MeshStandardMaterial({color:0x202723,roughness:.72,metalness:.55});
+  const brass=new THREE.MeshStandardMaterial({color:0x9a8150,roughness:.42,metalness:.72});
+  const body=new THREE.Mesh(new THREE.BoxGeometry(1.12,.48,.78),shell);body.position.y=.28;g.add(body);
+  const lid=new THREE.Mesh(new THREE.BoxGeometry(1.14,.10,.80),dark);lid.position.y=.55;g.add(lid);
+  for(const xx of [-.43,.43]){
+    const rail=new THREE.Mesh(new THREE.BoxGeometry(.07,.52,.84),dark);rail.position.set(xx,.29,0);g.add(rail);
+    const latch=new THREE.Mesh(new THREE.BoxGeometry(.12,.12,.055),brass);latch.position.set(xx*.45,.40,.425);g.add(latch);
+  }
+  const label=new THREE.Mesh(new THREE.BoxGeometry(.34,.13,.018),brass);label.position.set(0,.42,.405);g.add(label);
+  const handle=new THREE.Mesh(new THREE.BoxGeometry(.28,.07,.07),dark);handle.position.set(0,.18,.43);g.add(handle);
+  g.position.set(x,-7.58,z);g.rotation.y=Math.random()*Math.PI*2;scene.add(g);
+  return g;
+}
+function saveBunkerCases(){
+  try{localStorage.setItem('zone_bunker_cases',JSON.stringify({
+    timer:bunkerCaseSpawnTimer,
+    cases:bunkerCases.map(c=>({x:c.x,z:c.z,loot:c.loot,emptySince:c.emptySince}))
+  }));}catch(e){}
+}
+function spawnBunkerCase(){
+  let x,z,tries=0;
+  do{
+    x=405+(Math.random()*31-15.5);
+    z=365+(Math.random()*25-22.5);
+    tries++;
+  }while(tries<30 && bunkerCases.some(c=>Math.hypot(c.x-x,c.z-z)<4));
+  const mesh=buildBunkerCaseMesh(x,z);
+  const c={mesh,x,z,loot:bunkerCaseLootRoll(),emptySince:null};
+  bunkerCases.push(c);saveBunkerCases();
+  log('В бункере обнаружен чемодан с припасами',5000);
+  return c;
+}
+function restoreBunkerCases(){
+  try{
+    if(sessionStorage.getItem('zona_start_loading')==='1'){
+      localStorage.removeItem('zone_bunker_cases');
+      return;
+    }
+    const d=JSON.parse(localStorage.getItem('zone_bunker_cases')||'null');
+    if(!d)return;
+    if(Number.isFinite(d.timer))bunkerCaseSpawnTimer=Math.max(0,d.timer);
+    (d.cases||[]).forEach(c=>{
+      if(!Number.isFinite(c.x)||!Number.isFinite(c.z)||!Array.isArray(c.loot))return;
+      bunkerCases.push({mesh:buildBunkerCaseMesh(c.x,c.z),x:c.x,z:c.z,loot:c.loot,emptySince:Number.isFinite(c.emptySince)?c.emptySince:null});
+    });
+  }catch(e){}
+}
+function updateBunkerCases(dt){
+  bunkerCaseSpawnTimer-=dt;
+  if(bunkerCaseSpawnTimer<=0){
+    spawnBunkerCase();
+    bunkerCaseSpawnTimer=300+Math.random()*1800;
+    saveBunkerCases();
+  }
+  for(let i=bunkerCases.length-1;i>=0;i--){
+    const c=bunkerCases[i],empty=!c.loot||c.loot.every(v=>!v||!v.id||v.cnt<=0);
+    if(empty){
+      if(c.emptySince==null)c.emptySince=Date.now();
+      if(Date.now()-c.emptySince>=180000){
+        scene.remove(c.mesh);bunkerCases.splice(i,1);
+        if(bunkerCasePanel.style.display==='block')bunkerCasePanel.style.display='none';
+        saveBunkerCases();
+      }
+    }else c.emptySince=null;
+  }
+}
+function nearbyBunkerCase(){
+  if(!isPlayerInsideScienceBunker())return null;
+  let best=null,bd=2.9;
+  for(const c of bunkerCases){const d=Math.hypot(player.position.x-c.x,player.position.z-c.z);if(d<bd){best=c;bd=d;}}
+  return best;
+}
+function openBunkerCase(c){
+  bunkerCasePanel.style.display='block';
+  bunkerCasePanel.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><b>🧳 ЧЕМОДАН С ПРИПАСАМИ</b><button id="bunkerCaseClose" style="background:#49513e;color:#fff;border:1px solid #9a8c62;border-radius:7px;padding:6px 10px">Закрыть</button></div><div id="bunkerCaseSlots" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px"></div><div style="opacity:.72;margin-top:10px;font-size:12px">Три отделения. Нажми на предмет, чтобы забрать его.</div>`;
+  const grid=bunkerCasePanel.querySelector('#bunkerCaseSlots');
+  for(let i=0;i<3;i++){
+    const it=c.loot[i],slot=document.createElement('button');
+    slot.style.cssText='min-height:92px;background:linear-gradient(145deg,#303b32,#1c251f);border:1px solid #88784e;border-radius:9px;color:#f3efdf;padding:7px;';
+    const def=it&&ITEM_DEFS[it.id];
+    if(def){
+      slot.innerHTML=`<div style="font-size:24px">${def.icon}</div><small>${def.name}${it.cnt>1?' ×'+it.cnt:''}</small>`;
+      slot.onclick=()=>{
+        if(addItem(it.id,it.cnt)){
+          c.loot[i]=null;slot.innerHTML='—<br><small>Пусто</small>';slot.disabled=true;
+          if(c.loot.every(v=>!v||!v.id||v.cnt<=0))c.emptySince=Date.now();
+          saveBunkerCases();saveState();log('Предмет забран из чемодана');
+        }else log('Инвентарь заполнен');
+      };
+    }else{slot.innerHTML='—<br><small>Пусто</small>';slot.disabled=true;}
+    grid.appendChild(slot);
+  }
+  document.getElementById('bunkerCaseClose').onclick=()=>{bunkerCasePanel.style.display='none';};
+}
+restoreBunkerCases();
 function interact(){
+  const closeBunkerCase=nearbyBunkerCase();if(closeBunkerCase){openBunkerCase(closeBunkerCase);return;}
   const closeCrate=nearbyMilitaryCrate(); if(closeCrate){openMilitaryCrate(closeCrate);return;}
   if(player.position.distanceTo(traderPos) < 2.5){ openTrade(); return; }
   // Ищем ближайшую аномалию любого типа: стартовые аномалии тоже сканируются.
@@ -4052,6 +4189,7 @@ function updateWorldVisibility(){
   anomalies.forEach(a=>{if(a&&a.mesh){const v=d2(a.x,a.z)<=anomalyLimit2;a.mesh.visible=v;if(a.artifactMesh)a.artifactMesh.visible=v;}});
   const crateLimit2=220*220;
   militaryCrates.forEach(c=>{if(c&&c.mesh)c.mesh.visible=d2(c.x,c.z)<=crateLimit2;});
+  bunkerCases.forEach(c=>{if(c&&c.mesh)c.mesh.visible=d2(c.x,c.z)<=crateLimit2;});
 }
 
 function animate(){
@@ -4060,6 +4198,7 @@ function animate(){
   worldVisibilityAccumulator+=rawDt;
   if(worldVisibilityAccumulator>=0.4){worldVisibilityAccumulator=0;updateWorldVisibility();}
   updateMilitaryCrates(rawDt);
+  updateBunkerCases(rawDt);
   radarBlinkAccumulator+=rawDt;
   if(radarBlinkAccumulator>=0.1){
     radarBlinkAccumulator=0;
