@@ -4519,7 +4519,7 @@ function animate(){
     eatTimer=0;
     const art=artifactTotals();
     state.maxHp=Math.max(100,100+Math.max(0,state.lvl-1)*10+art.maxHp);state.hp=Math.min(state.hp,state.maxHp);
-    if(state.hp>20)state.hp=Math.max(1,state.hp-0.1);
+    // Убрано пассивное снятие 0.1 HP/сек: здоровье не должно уменьшаться без причины.
     if(art.radRate)state.rad=Math.max(0,Math.min(state.maxRad,state.rad+art.radRate));
     if(art.hpRate)state.hp=Math.max(1,Math.min(state.maxHp,state.hp+art.hpRate));
   }
