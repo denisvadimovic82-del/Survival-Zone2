@@ -3539,58 +3539,6 @@ function resolveRadarCollision(entity,bodyRadius=.42){
   }
 }
 
-// Reduce draw calls for static harvestable resource prefabs without simplifying geometry or materials.
-// Each prefab (tree/rock/bush) is merged into one geometry with material groups and preserved UVs.
-function mergeStaticResourcePrefab(group){
-  const parts=[];
-  group.updateMatrixWorld(true);
-  group.traverse(obj=>{
-    if(!obj.isMesh || !obj.geometry || !obj.material)return;
-    obj.updateMatrix();
-    const source=obj.geometry;
-    const position=source.getAttribute('position');
-    if(!position)return;
-    const normal=source.getAttribute('normal');
-    const uv=source.getAttribute('uv');
-    const geom=source.clone();
-    geom.applyMatrix4(obj.matrix);
-    if(!geom.getAttribute('normal'))geom.computeVertexNormals();
-    parts.push({geometry:geom,material:obj.material,castShadow:obj.castShadow,receiveShadow:obj.receiveShadow});
-  });
-  if(parts.length<2)return group;
-  const materials=[],positions=[],normals=[],uvs=[],indices=[];
-  let vertexOffset=0;
-  const merged=new THREE.BufferGeometry();
-  for(const part of parts){
-    const geo=part.geometry, pos=geo.getAttribute('position'), norm=geo.getAttribute('normal'), tex=geo.getAttribute('uv');
-    const materialIndex=materials.indexOf(part.material);
-    const mi=materialIndex>=0?materialIndex:(materials.push(part.material)-1);
-    for(let i=0;i<pos.count;i++){
-      positions.push(pos.getX(i),pos.getY(i),pos.getZ(i));
-      normals.push(norm?norm.getX(i):0,norm?norm.getY(i):1,norm?norm.getZ(i):0);
-      uvs.push(tex?tex.getX(i):0,tex?tex.getY(i):0);
-    }
-    const srcIndex=geo.index;
-    const start=indices.length;
-    if(srcIndex){for(let i=0;i<srcIndex.count;i++)indices.push(srcIndex.getX(i)+vertexOffset);}
-    else{for(let i=0;i<pos.count;i++)indices.push(i+vertexOffset);}
-    merged.addGroup(start,indices.length-start,mi);
-    vertexOffset+=pos.count;
-    geo.dispose();
-  }
-  merged.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
-  merged.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));
-  merged.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));
-  merged.setIndex(indices);
-  merged.computeBoundingSphere();
-  const combined=new THREE.Mesh(merged,materials);
-  combined.castShadow=parts.some(p=>p.castShadow);
-  combined.receiveShadow=parts.some(p=>p.receiveShadow);
-  group.clear();
-  group.add(combined);
-  return group;
-}
-
 function addResource(type, x, z){
   // Жёсткая граница: ресурсы никогда не создаются за пределами суши.
   if(!isInsidePlayableWorld(x,z,WORLD_OBJECT_MARGIN)) return;
@@ -3689,7 +3637,6 @@ function addResource(type, x, z){
     branchSpecs.forEach(([x,y,z,rx,rz])=>{const stem=new THREE.Mesh(addResource.bushBranchGeo,addResource.bushBranchMat);stem.position.set(x,y-.28,z);stem.rotation.set(rx,0,rz);g.add(stem);});
     mesh=g; hp=2; radius=.7;
   }
-  if(mesh && mesh.isGroup) mergeStaticResourcePrefab(mesh);
   mesh.position.x = x;
   mesh.position.z = z;
   // Ground-fit resource prefabs by their exact lowest world-space geometry point.
